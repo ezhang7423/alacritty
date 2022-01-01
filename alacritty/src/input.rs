@@ -65,6 +65,8 @@ pub trait ActionContext<T: EventListener> {
     fn mark_dirty(&mut self) {}
     fn size_info(&self) -> SizeInfo;
     fn select_current_line(&mut self) {}
+    fn scl_cb(&mut self) {}
+    fn scl_cb2(&mut self) {}
     fn copy_selection(&mut self, _ty: ClipboardType) {}
     fn start_selection(&mut self, _ty: SelectionType, _point: Point, _side: Side) {}
     fn toggle_selection(&mut self, _ty: SelectionType, _point: Point, _side: Side) {}
@@ -140,6 +142,9 @@ impl<T: EventListener> Execute<T> for Action {
     #[inline]
     fn execute<A: ActionContext<T>>(&self, ctx: &mut A) {
         match self {
+            Action::SelectCurrentLineCallback => ctx.scl_cb(),
+            Action::SelectCurrentLineCallback2 => ctx.scl_cb2(),
+
             Action::Esc(s) => {
                 ctx.on_typing_start();
 

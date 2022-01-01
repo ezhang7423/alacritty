@@ -115,6 +115,9 @@ pub enum Action {
     /// Select current line
     SelectCurrentLine,
     
+    SelectCurrentLineCallback,
+    SelectCurrentLineCallback2,
+
     /// Paste contents of system clipboard.
     Paste,
 

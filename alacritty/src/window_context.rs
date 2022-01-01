@@ -23,7 +23,7 @@ use alacritty_terminal::config::PtyConfig;
 use alacritty_terminal::event::Event as TerminalEvent;
 use alacritty_terminal::event_loop::{EventLoop as PtyEventLoop, Msg, Notifier};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::Direction;
+use alacritty_terminal::index::{Column, Direction, Line, Point};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::tty;
@@ -38,6 +38,7 @@ use crate::scheduler::Scheduler;
 
 /// Event context for one individual Alacritty window.
 pub struct WindowContext {
+    tmp_point: Box<Point>,
     pub message_buffer: MessageBuffer,
     pub display: Display,
     event_queue: Vec<GlutinEvent<'static, Event>>,
@@ -132,6 +133,7 @@ impl WindowContext {
 
         // Create context for the Alacritty window.
         Ok(WindowContext {
+            tmp_point: Box::new(Point { column: Column(0), line: Line(0) }),
             font_size: config.font.size(),
             notifier: Notifier(loop_tx),
             terminal,
@@ -220,7 +222,7 @@ impl WindowContext {
             // Skip further event handling with no staged updates.
             GlutinEvent::RedrawEventsCleared if self.event_queue.is_empty() && !self.dirty => {
                 return;
-            },
+            }
             // Continue to process all pending events.
             GlutinEvent::RedrawEventsCleared => (),
             // Remap DPR change event to remove the lifetime.
@@ -232,7 +234,7 @@ impl WindowContext {
                 let event = Event::new(EventType::DprChanged(scale_factor, size), window_id);
                 self.event_queue.push(event.into());
                 return;
-            },
+            }
             // Transmute to extend lifetime, which exists only for `ScaleFactorChanged` event.
             // Since we remap that event to remove the lifetime, this is safe.
             event => unsafe {
@@ -246,6 +248,7 @@ impl WindowContext {
         let old_is_searching = self.search_state.history_index.is_some();
 
         let context = ActionContext {
+            tmp_point: &mut self.tmp_point,
             message_buffer: &mut self.message_buffer,
             received_count: &mut self.received_count,
             suppress_chars: &mut self.suppress_chars,

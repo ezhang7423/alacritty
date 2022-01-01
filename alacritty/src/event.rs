@@ -13,7 +13,10 @@ use std::time::{Duration, Instant};
 use std::{env, f32, mem};
 
 use glutin::dpi::PhysicalSize;
-use glutin::event::{ElementState, Event as GlutinEvent, ModifiersState, MouseButton, WindowEvent};
+use glutin::event::{
+    ElementState, Event as GlutinEvent, KeyboardInput, ModifiersState, MouseButton, VirtualKeyCode,
+    WindowEvent,
+};
 use glutin::event_loop::{ControlFlow, EventLoop, EventLoopProxy, EventLoopWindowTarget};
 use glutin::platform::run_return::EventLoopExtRunReturn;
 #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
@@ -24,6 +27,10 @@ use log::{debug, error, info, warn};
 use wayland_client::{Display as WaylandDisplay, EventQueue};
 
 use crossfont::{self, Size};
+
+use x11_dl::keysym::{XK_Control_L, XK_End, XK_Home, XK_E, XK_Q};
+use x11_dl::xlib::CurrentTime;
+use x11_dl::{xinput2, xlib, xtest};
 
 use alacritty_terminal::config::LOG_TARGET_CONFIG;
 use alacritty_terminal::event::{Event as TerminalEvent, EventListener, Notify};
@@ -170,6 +177,7 @@ impl Default for SearchState {
 }
 
 pub struct ActionContext<'a, N, T> {
+    pub tmp_point: &'a mut Box<Point>,
     pub notifier: &'a mut N,
     pub terminal: &'a mut Term<T>,
     pub clipboard: &'a mut Clipboard,
@@ -219,7 +227,6 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             let display_offset = self.terminal.grid().display_offset();
             self.search_state.display_offset_delta += old_offset - display_offset as i32;
         }
-
         // Update selection.
         if self.terminal.mode().contains(TermMode::VI)
             && self.terminal.selection.as_ref().map_or(true, |s| !s.is_empty())
@@ -238,18 +245,65 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
     }
 
     fn select_current_line(&mut self) {
-        for val in &self.search_state.history {
-            info!("{}", val);
+        // self.event_proxy.send_event(Event())
+        self.write_to_pty(String::from("").into_bytes());
+
+        if !self.event_loop.is_x11() {
+            return;
         }
-        let point = self.terminal.grid().cursor.point;
-        self.start_selection(SelectionType::Simple, point, Direction::Left);
-        self.update_selection(
-            point.add(self.terminal, Boundary::None, self.terminal.last_column().0),
-            Direction::Right,
-        )
-        // info!("hihaha");
+
+        unsafe {
+            let xlib = xlib::Xlib::open().unwrap();
+            let xtest = xtest::Xf86vmode::open().unwrap();
+            let xconn = self.event_loop.xlib_xconnection().unwrap();
+            let display = xconn.display;
+
+            let type_char = |display: *mut xlib::Display, key: u32| {
+                let modcode = (xlib.XKeysymToKeycode)(display, key as u64) as u32;
+                (xtest.XTestFakeKeyEvent)(display, modcode, xlib::False, CurrentTime);
+                (xtest.XTestFakeKeyEvent)(display, modcode, xlib::True, 0);
+                (xtest.XTestFakeKeyEvent)(display, modcode, xlib::False, 0);
+            };
+
+            // Open display connection.
+            let ctrl_l = (xlib.XKeysymToKeycode)(display, XK_Control_L as u64) as u32;
+            (xtest.XTestFakeKeyEvent)(display, ctrl_l, xlib::False, 0); // release control
+            type_char(display, XK_Home);
+            (xtest.XTestFakeKeyEvent)(display, ctrl_l, xlib::True, 0); // hold control
+            type_char(display, XK_Q);
+        }
     }
 
+    fn scl_cb(&mut self) {
+        println!("Updating temporary point");
+        **self.tmp_point = self.terminal.grid().cursor.point;
+        println!("{}. {}", self.tmp_point.line.0, self.tmp_point.column.0);
+        unsafe {
+            let xlib = xlib::Xlib::open().unwrap();
+            let xtest = xtest::Xf86vmode::open().unwrap();
+            let xconn = self.event_loop.xlib_xconnection().unwrap();
+            let display = xconn.display;
+
+            let type_char = |display: *mut xlib::Display, key: u32| {
+                let modcode = (xlib.XKeysymToKeycode)(display, key as u64) as u32;
+                (xtest.XTestFakeKeyEvent)(display, modcode, xlib::False, CurrentTime);
+                (xtest.XTestFakeKeyEvent)(display, modcode, xlib::True, 0);
+                (xtest.XTestFakeKeyEvent)(display, modcode, xlib::False, 0);
+            };
+
+            // Open display connection.
+            let ctrl_l = (xlib.XKeysymToKeycode)(display, XK_Control_L as u64) as u32;
+            (xtest.XTestFakeKeyEvent)(display, ctrl_l, xlib::False, 0); // release control
+            type_char(display, XK_End);
+            (xtest.XTestFakeKeyEvent)(display, ctrl_l, xlib::True, 0); // hold control
+            type_char(display, XK_E);
+        }
+    }
+    fn scl_cb2(&mut self) {
+        println!("in cb2: {}. {}", self.tmp_point.line.0, self.tmp_point.column.0);
+        self.start_selection(SelectionType::Simple, **self.tmp_point, Direction::Left);
+        self.update_selection(self.terminal.grid().cursor.point, Direction::Right);
+    }
     // Copy text selection.
     fn copy_selection(&mut self, ty: ClipboardType) {
         let text = match self.terminal.selection_to_string().filter(|s| !s.is_empty()) {
