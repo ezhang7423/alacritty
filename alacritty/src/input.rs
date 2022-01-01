@@ -64,6 +64,7 @@ pub trait ActionContext<T: EventListener> {
     fn write_to_pty<B: Into<Cow<'static, [u8]>>>(&self, _data: B) {}
     fn mark_dirty(&mut self) {}
     fn size_info(&self) -> SizeInfo;
+    fn select_current_line(&mut self) {}
     fn copy_selection(&mut self, _ty: ClipboardType) {}
     fn start_selection(&mut self, _ty: SelectionType, _point: Point, _side: Side) {}
     fn toggle_selection(&mut self, _ty: SelectionType, _point: Point, _side: Side) {}
@@ -245,6 +246,7 @@ impl<T: EventListener> Execute<T> for Action {
             Action::SearchBackward => ctx.start_search(Direction::Left),
             Action::Copy => ctx.copy_selection(ClipboardType::Clipboard),
             #[cfg(not(any(target_os = "macos", windows)))]
+            Action::SelectCurrentLine => ctx.select_current_line(),
             Action::CopySelection => ctx.copy_selection(ClipboardType::Selection),
             Action::ClearSelection => ctx.clear_selection(),
             Action::Paste => {

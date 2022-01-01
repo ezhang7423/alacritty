@@ -237,6 +237,19 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         *self.dirty = true;
     }
 
+    fn select_current_line(&mut self) {
+        for val in &self.search_state.history {
+            info!("{}", val);
+        }
+        let point = self.terminal.grid().cursor.point;
+        self.start_selection(SelectionType::Simple, point, Direction::Left);
+        self.update_selection(
+            point.add(self.terminal, Boundary::None, self.terminal.last_column().0),
+            Direction::Right,
+        )
+        // info!("hihaha");
+    }
+
     // Copy text selection.
     fn copy_selection(&mut self, ty: ClipboardType) {
         let text = match self.terminal.selection_to_string().filter(|s| !s.is_empty()) {
@@ -293,13 +306,13 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         match &mut self.terminal.selection {
             Some(selection) if selection.ty == ty && !selection.is_empty() => {
                 self.clear_selection();
-            },
+            }
             Some(selection) if !selection.is_empty() => {
                 selection.ty = ty;
                 *self.dirty = true;
 
                 self.copy_selection(ClipboardType::Selection);
-            },
+            }
             _ => self.start_selection(ty, point, side),
         }
     }
@@ -511,7 +524,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             Some(index) => {
                 self.search_state.history[0] = self.search_state.history[index].clone();
                 self.search_state.history_index = Some(0);
-            },
+            }
             None => return,
         }
         let regex = &mut self.search_state.history[0];
@@ -520,7 +533,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             // Handle backspace/ctrl+h.
             '\x08' | '\x7f' => {
                 let _ = regex.pop();
-            },
+            }
             // Add ascii and unicode text.
             ' '..='~' | '\u{a0}'..='\u{10ffff}' => regex.push(c),
             // Ignore non-printable characters.
@@ -678,23 +691,23 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
                 let mut args = command.args().to_vec();
                 args.push(text);
                 self.spawn_daemon(command.program(), &args);
-            },
+            }
             // Copy the text to the clipboard.
             HintAction::Action(HintInternalAction::Copy) => {
                 let text = self.terminal.bounds_to_string(*hint.bounds.start(), *hint.bounds.end());
                 self.clipboard.store(ClipboardType::Clipboard, text);
-            },
+            }
             // Write the text to the PTY/search.
             HintAction::Action(HintInternalAction::Paste) => {
                 let text = self.terminal.bounds_to_string(*hint.bounds.start(), *hint.bounds.end());
                 self.paste(&text);
-            },
+            }
             // Select the text.
             HintAction::Action(HintInternalAction::Select) => {
                 self.start_selection(SelectionType::Simple, *hint.bounds.start(), Side::Left);
                 self.update_selection(*hint.bounds.end(), Side::Right);
                 self.copy_selection(ClipboardType::Selection);
-            },
+            }
             // Move the vi mode cursor.
             HintAction::Action(HintInternalAction::MoveViModeCursor) => {
                 // Enter vi mode if we're not in it already.
@@ -703,7 +716,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
                 }
 
                 self.terminal.vi_goto_point(*hint.bounds.start());
-            },
+            }
         }
     }
 
@@ -717,7 +730,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
                 } else {
                     SelectionType::Simple
                 }
-            },
+            }
             ClickState::DoubleClick => SelectionType::Semantic,
             ClickState::TripleClick => SelectionType::Lines,
             ClickState::None => return,
@@ -885,7 +898,7 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
                 // Since we found a result, we require no delayed re-search.
                 let timer_id = TimerId::new(Topic::DelayedSearch, self.display.window.id());
                 self.scheduler.unschedule(timer_id);
-            },
+            }
             // Reset viewport only when we know there is no match, to prevent unnecessary jumping.
             None if limit.is_none() => self.search_reset_state(),
             None => {
@@ -898,7 +911,7 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
 
                 // Clear focused match.
                 self.search_state.focused_match = None;
-            },
+            }
         }
 
         *self.dirty = true;
@@ -1025,29 +1038,29 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
 
                     self.ctx.window().dpr = scale_factor;
                     *self.ctx.dirty = true;
-                },
+                }
                 EventType::SearchNext => self.ctx.goto_match(None),
                 EventType::Scroll(scroll) => self.ctx.scroll(scroll),
                 EventType::BlinkCursor => {
                     self.ctx.display.cursor_hidden ^= true;
                     *self.ctx.dirty = true;
-                },
+                }
                 EventType::Message(message) => {
                     self.ctx.message_buffer.push(message);
                     self.ctx.display.pending_update.dirty = true;
                     *self.ctx.dirty = true;
-                },
+                }
                 EventType::Terminal(event) => match event {
                     TerminalEvent::Title(title) => {
                         if self.ctx.config.window.dynamic_title {
                             self.ctx.window().set_title(&title);
                         }
-                    },
+                    }
                     TerminalEvent::ResetTitle => {
                         if self.ctx.config.window.dynamic_title {
                             self.ctx.display.window.set_title(&self.ctx.config.window.title);
                         }
-                    },
+                    }
                     TerminalEvent::Wakeup => *self.ctx.dirty = true,
                     TerminalEvent::Bell => {
                         // Set window urgency.
@@ -1063,18 +1076,18 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                         if let Some(bell_command) = &self.ctx.config.bell.command {
                             self.ctx.spawn_daemon(bell_command.program(), bell_command.args());
                         }
-                    },
+                    }
                     TerminalEvent::ClipboardStore(clipboard_type, content) => {
                         self.ctx.clipboard.store(clipboard_type, content);
-                    },
+                    }
                     TerminalEvent::ClipboardLoad(clipboard_type, format) => {
                         let text = format(self.ctx.clipboard.load(clipboard_type).as_str());
                         self.ctx.write_to_pty(text.into_bytes());
-                    },
+                    }
                     TerminalEvent::ColorRequest(index, format) => {
                         let text = format(self.ctx.display.colors[index]);
                         self.ctx.write_to_pty(text.into_bytes());
-                    },
+                    }
                     TerminalEvent::PtyWrite(text) => self.ctx.write_to_pty(text.into_bytes()),
                     TerminalEvent::MouseCursorDirty => self.reset_mouse_cursor(),
                     TerminalEvent::Exit => (),
@@ -1097,25 +1110,25 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
 
                         self.ctx.display.pending_update.set_dimensions(size);
                         *self.ctx.dirty = true;
-                    },
+                    }
                     WindowEvent::KeyboardInput { input, is_synthetic: false, .. } => {
                         self.key_input(input);
-                    },
+                    }
                     WindowEvent::ModifiersChanged(modifiers) => self.modifiers_input(modifiers),
                     WindowEvent::ReceivedCharacter(c) => self.received_char(c),
                     WindowEvent::MouseInput { state, button, .. } => {
                         self.ctx.window().set_mouse_visible(true);
                         self.mouse_input(state, button);
                         *self.ctx.dirty = true;
-                    },
+                    }
                     WindowEvent::CursorMoved { position, .. } => {
                         self.ctx.window().set_mouse_visible(true);
                         self.mouse_moved(position);
-                    },
+                    }
                     WindowEvent::MouseWheel { delta, phase, .. } => {
                         self.ctx.window().set_mouse_visible(true);
                         self.mouse_wheel_input(delta, phase);
-                    },
+                    }
                     WindowEvent::Focused(is_focused) => {
                         self.ctx.terminal.is_focused = is_focused;
                         *self.ctx.dirty = true;
@@ -1128,18 +1141,18 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
 
                         self.ctx.update_cursor_blinking();
                         self.on_focus_change(is_focused);
-                    },
+                    }
                     WindowEvent::DroppedFile(path) => {
                         let path: String = path.to_string_lossy().into();
                         self.ctx.write_to_pty((path + " ").into_bytes());
-                    },
+                    }
                     WindowEvent::CursorLeft { .. } => {
                         self.ctx.mouse.inside_text_area = false;
 
                         if self.ctx.display().highlighted_hint.is_some() {
                             *self.ctx.dirty = true;
                         }
-                    },
+                    }
                     WindowEvent::KeyboardInput { is_synthetic: true, .. }
                     | WindowEvent::TouchpadPressure { .. }
                     | WindowEvent::ScaleFactorChanged { .. }
@@ -1152,7 +1165,7 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                     | WindowEvent::Touch(_)
                     | WindowEvent::Moved(_) => (),
                 }
-            },
+            }
             GlutinEvent::Suspended { .. }
             | GlutinEvent::NewEvents { .. }
             | GlutinEvent::DeviceEvent { .. }
@@ -1268,7 +1281,7 @@ impl Processor {
 
                         *control_flow = ControlFlow::Exit;
                     }
-                },
+                }
                 // Process all pending events.
                 GlutinEvent::RedrawEventsCleared => {
                     *control_flow = match scheduler.update() {
@@ -1295,7 +1308,7 @@ impl Processor {
                             GlutinEvent::RedrawEventsCleared,
                         );
                     }
-                },
+                }
                 // Process config update.
                 GlutinEvent::UserEvent(Event {
                     payload: EventType::ConfigReload(path), ..
@@ -1316,7 +1329,7 @@ impl Processor {
                             window_context.update_config(&old_config, &self.config);
                         }
                     }
-                },
+                }
                 // Create a new terminal window.
                 GlutinEvent::UserEvent(Event {
                     payload: EventType::CreateWindow(options), ..
@@ -1324,7 +1337,7 @@ impl Processor {
                     if let Err(err) = self.create_window(event_loop, proxy.clone(), options) {
                         error!("Could not open window: {:?}", err);
                     }
-                },
+                }
                 // Process events affecting all windows.
                 GlutinEvent::UserEvent(event @ Event { window_id: None, .. }) => {
                     for window_context in self.windows.values_mut() {
@@ -1337,7 +1350,7 @@ impl Processor {
                             event.clone().into(),
                         );
                     }
-                },
+                }
                 // Process window-specific events.
                 GlutinEvent::WindowEvent { window_id, .. }
                 | GlutinEvent::UserEvent(Event { window_id: Some(window_id), .. })
@@ -1352,7 +1365,7 @@ impl Processor {
                             event,
                         );
                     }
-                },
+                }
                 _ => (),
             }
         });

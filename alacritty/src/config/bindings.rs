@@ -112,6 +112,9 @@ pub enum Action {
     #[config(skip)]
     Mouse(MouseAction),
 
+    /// Select current line
+    SelectCurrentLine,
+    
     /// Paste contents of system clipboard.
     Paste,
 

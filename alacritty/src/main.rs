@@ -128,6 +128,7 @@ impl Drop for TemporaryFiles {
 fn alacritty(options: Options) -> Result<(), String> {
     info!("Welcome to Alacritty");
 
+    
     // Setup glutin event loop.
     let window_event_loop = GlutinEventLoop::<Event>::with_user_event();
 
@@ -140,7 +141,8 @@ fn alacritty(options: Options) -> Result<(), String> {
     log_config_path(&config);
 
     // Update the log level from config.
-    log::set_max_level(config.debug.log_level);
+    // log::set_max_level(config.debug.log_level);
+    log::set_max_level(log::LevelFilter::Info);
 
     // Set environment variables.
     tty::setup_env(&config.terminal_config);
