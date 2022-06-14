@@ -52,7 +52,7 @@ pub enum ViMotion {
 }
 
 /// Cursor tracking vi mode position.
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, PartialEq, Eq)]
 pub struct ViModeCursor {
     pub point: Point,
 }
@@ -381,11 +381,12 @@ mod tests {
     use crate::ansi::Handler;
     use crate::config::Config;
     use crate::index::{Column, Line};
-    use crate::term::{SizeInfo, Term};
+    use crate::term::test::TermSize;
+    use crate::term::Term;
 
     fn term() -> Term<()> {
-        let size = SizeInfo::new(20., 20., 1.0, 1.0, 0.0, 0.0, false);
-        Term::new(&Config::default(), size, ())
+        let size = TermSize::new(20, 20);
+        Term::new(&Config::default(), &size, ())
     }
 
     #[test]

@@ -27,14 +27,14 @@ use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Boundary, Column, Direction, Point, Side};
 use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::search::Match;
-use alacritty_terminal::term::{ClipboardType, SizeInfo, Term, TermMode};
+use alacritty_terminal::term::{ClipboardType, Term, TermMode};
 use alacritty_terminal::vi_mode::ViMotion;
 
 use crate::clipboard::Clipboard;
 use crate::config::{Action, BindingMode, Key, MouseAction, SearchAction, UiConfig, ViAction};
 use crate::display::hint::HintMatch;
 use crate::display::window::Window;
-use crate::display::Display;
+use crate::display::{Display, SizeInfo};
 use crate::event::{ClickState, Event, EventType, Mouse, TYPING_SEARCH_DELAY};
 use crate::message_bar::{self, Message};
 use crate::scheduler::{Scheduler, TimerId, Topic};
@@ -157,7 +157,10 @@ impl<T: EventListener> Execute<T> for Action {
                 ctx.display().hint_state.start(hint.clone());
                 ctx.mark_dirty();
             },
-            Action::ToggleViMode => ctx.toggle_vi_mode(),
+            Action::ToggleViMode => {
+                ctx.on_typing_start();
+                ctx.toggle_vi_mode()
+            },
             Action::ViMotion(motion) => {
                 ctx.on_typing_start();
                 ctx.terminal_mut().vi_motion(*motion);
@@ -184,6 +187,8 @@ impl<T: EventListener> Execute<T> for Action {
                 ctx.display().vi_highlighted_hint = hint;
             },
             Action::Vi(ViAction::SearchNext) => {
+                ctx.on_typing_start();
+
                 let terminal = ctx.terminal();
                 let direction = ctx.search_direction();
                 let vi_point = terminal.vi_mode_cursor.point;
@@ -198,6 +203,8 @@ impl<T: EventListener> Execute<T> for Action {
                 }
             },
             Action::Vi(ViAction::SearchPrevious) => {
+                ctx.on_typing_start();
+
                 let terminal = ctx.terminal();
                 let direction = ctx.search_direction().opposite();
                 let vi_point = terminal.vi_mode_cursor.point;
@@ -228,6 +235,15 @@ impl<T: EventListener> Execute<T> for Action {
                     ctx.terminal_mut().vi_goto_point(*regex_match.end());
                     ctx.mark_dirty();
                 }
+            },
+            Action::Vi(ViAction::CenterAroundViCursor) => {
+                let term = ctx.terminal();
+                let display_offset = term.grid().display_offset() as i32;
+                let target = -display_offset + term.screen_lines() as i32 / 2 - 1;
+                let line = term.vi_mode_cursor.point.line;
+                let scroll_lines = target - line.0;
+
+                ctx.scroll(Scroll::Delta(scroll_lines));
             },
             Action::Search(SearchAction::SearchFocusNext) => {
                 ctx.advance_search_origin(ctx.search_direction());
@@ -263,6 +279,7 @@ impl<T: EventListener> Execute<T> for Action {
                 ctx.paste(&text);
             },
             Action::ToggleFullscreen => ctx.window().toggle_fullscreen(),
+            Action::ToggleMaximized => ctx.window().toggle_maximized(),
             #[cfg(target_os = "macos")]
             Action::ToggleSimpleFullscreen => ctx.window().toggle_simple_fullscreen(),
             #[cfg(target_os = "macos")]
@@ -613,8 +630,10 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
         let timer_id = TimerId::new(Topic::SelectionScrolling, self.ctx.window().id());
         self.ctx.scheduler_mut().unschedule(timer_id);
 
-        // Copy selection on release, to prevent flooding the display server.
-        self.ctx.copy_selection(ClipboardType::Selection);
+        if let MouseButton::Left | MouseButton::Right = button {
+            // Copy selection on release, to prevent flooding the display server.
+            self.ctx.copy_selection(ClipboardType::Selection);
+        }
     }
 
     pub fn mouse_wheel_input(&mut self, delta: MouseScrollDelta, phase: TouchPhase) {
@@ -805,7 +824,9 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
 
         self.ctx.on_typing_start();
 
-        self.ctx.scroll(Scroll::Bottom);
+        if self.ctx.terminal().grid().display_offset() != 0 {
+            self.ctx.scroll(Scroll::Bottom);
+        }
         self.ctx.clear_selection();
 
         let utf8_len = c.len_utf8();
@@ -925,14 +946,14 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
 
     /// Handle automatic scrolling when selecting above/below the window.
     fn update_selection_scrolling(&mut self, mouse_y: i32) {
-        let dpr = self.ctx.window().dpr;
+        let scale_factor = self.ctx.window().scale_factor;
         let size = self.ctx.size_info();
         let window_id = self.ctx.window().id();
         let scheduler = self.ctx.scheduler_mut();
 
         // Scale constants by DPI.
-        let min_height = (MIN_SELECTION_SCROLLING_HEIGHT * dpr) as i32;
-        let step = (SELECTION_SCROLLING_STEP * dpr) as i32;
+        let min_height = (MIN_SELECTION_SCROLLING_HEIGHT * scale_factor) as i32;
+        let step = (SELECTION_SCROLLING_STEP * scale_factor) as i32;
 
         // Compute the height of the scrolling areas.
         let end_top = max(min_height, size.padding_y() as i32);
@@ -1107,7 +1128,7 @@ mod tests {
                     false,
                 );
 
-                let mut terminal = Term::new(&cfg.terminal_config, size, MockEventProxy);
+                let mut terminal = Term::new(&cfg.terminal_config, &size, MockEventProxy);
 
                 let mut mouse = Mouse {
                     click_state: $initial_state,

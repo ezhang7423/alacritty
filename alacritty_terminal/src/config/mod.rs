@@ -10,7 +10,7 @@ mod scrolling;
 
 use crate::ansi::{CursorShape, CursorStyle};
 
-pub use crate::config::scrolling::Scrolling;
+pub use crate::config::scrolling::{Scrolling, MAX_SCROLLBACK_LINES};
 
 pub const LOG_TARGET_CONFIG: &str = "alacritty_config_derive";
 const MIN_BLINK_INTERVAL: u64 = 10;
@@ -33,7 +33,7 @@ pub struct Config {
     pub pty_config: PtyConfig,
 }
 
-#[derive(ConfigDeserialize, Clone, Debug, PartialEq, Default)]
+#[derive(ConfigDeserialize, Clone, Debug, PartialEq, Eq, Default)]
 pub struct PtyConfig {
     /// Path to a shell program to run on startup.
     pub shell: Option<Program>,

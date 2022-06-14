@@ -7,15 +7,16 @@ use alacritty_terminal::ansi::{Color, CursorShape, NamedColor};
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::{Dimensions, Indexed};
 use alacritty_terminal::index::{Column, Direction, Line, Point};
+use alacritty_terminal::selection::SelectionRange;
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::color::{CellRgb, Rgb};
 use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
-use alacritty_terminal::term::{RenderableContent as TerminalContent, Term, TermMode};
+use alacritty_terminal::term::{self, RenderableContent as TerminalContent, Term, TermMode};
 
 use crate::config::UiConfig;
 use crate::display::color::{List, DIM_FACTOR};
 use crate::display::hint::HintState;
-use crate::display::{self, Display, MAX_SEARCH_LINES};
+use crate::display::{Display, MAX_SEARCH_LINES};
 use crate::event::SearchState;
 
 /// Minimum contrast between a fixed cursor color and the cell's background.
@@ -26,7 +27,7 @@ pub const MIN_CURSOR_CONTRAST: f64 = 1.5;
 /// This provides the terminal cursor and an iterator over all non-empty cells.
 pub struct RenderableContent<'a> {
     terminal_content: TerminalContent<'a>,
-    cursor: Option<RenderableCursor>,
+    cursor: RenderableCursor,
     cursor_shape: CursorShape,
     cursor_point: Point<usize>,
     search: Option<Regex<'a>>,
@@ -62,7 +63,7 @@ impl<'a> RenderableContent<'a> {
         // Convert terminal cursor point to viewport position.
         let cursor_point = terminal_content.cursor.point;
         let display_offset = terminal_content.display_offset;
-        let cursor_point = display::point_to_viewport(display_offset, cursor_point).unwrap();
+        let cursor_point = term::point_to_viewport(display_offset, cursor_point).unwrap();
 
         let hint = if display.hint_state.active() {
             display.hint_state.update_matches(term);
@@ -73,7 +74,7 @@ impl<'a> RenderableContent<'a> {
 
         Self {
             colors: &display.colors,
-            cursor: None,
+            cursor: RenderableCursor::new_hidden(),
             terminal_content,
             focused_match,
             cursor_shape,
@@ -90,7 +91,7 @@ impl<'a> RenderableContent<'a> {
     }
 
     /// Get the terminal cursor.
-    pub fn cursor(mut self) -> Option<RenderableCursor> {
+    pub fn cursor(mut self) -> RenderableCursor {
         // Assure this function is only called after the iterator has been drained.
         debug_assert!(self.next().is_none());
 
@@ -102,14 +103,12 @@ impl<'a> RenderableContent<'a> {
         self.terminal_content.colors[color].unwrap_or(self.colors[color])
     }
 
-    /// Assemble the information required to render the terminal cursor.
-    ///
-    /// This will return `None` when there is no cursor visible.
-    fn renderable_cursor(&mut self, cell: &RenderableCell) -> Option<RenderableCursor> {
-        if self.cursor_shape == CursorShape::Hidden {
-            return None;
-        }
+    pub fn selection_range(&self) -> Option<SelectionRange> {
+        self.terminal_content.selection
+    }
 
+    /// Assemble the information required to render the terminal cursor.
+    fn renderable_cursor(&mut self, cell: &RenderableCell) -> RenderableCursor {
         // Cursor colors.
         let color = if self.terminal_content.mode.contains(TermMode::VI) {
             self.config.colors.vi_mode_cursor
@@ -134,13 +133,13 @@ impl<'a> RenderableContent<'a> {
             text_color = self.config.colors.primary.background;
         }
 
-        Some(RenderableCursor {
+        RenderableCursor {
             is_wide: cell.flags.contains(Flags::WIDE_CHAR),
             shape: self.cursor_shape,
             point: self.cursor_point,
             cursor_color,
             text_color,
-        })
+        }
     }
 }
 
@@ -159,18 +158,15 @@ impl<'a> Iterator for RenderableContent<'a> {
 
             if self.cursor_point == cell.point {
                 // Store the cursor which should be rendered.
-                self.cursor = self.renderable_cursor(&cell).map(|cursor| {
-                    if cursor.shape == CursorShape::Block {
-                        cell.fg = cursor.text_color;
-                        cell.bg = cursor.cursor_color;
+                self.cursor = self.renderable_cursor(&cell);
+                if self.cursor.shape == CursorShape::Block {
+                    cell.fg = self.cursor.text_color;
+                    cell.bg = self.cursor.cursor_color;
 
-                        // Since we draw Block cursor by drawing cell below it with a proper color,
-                        // we must adjust alpha to make it visible.
-                        cell.bg_alpha = 1.;
-                    }
-
-                    cursor
-                });
+                    // Since we draw Block cursor by drawing cell below it with a proper color,
+                    // we must adjust alpha to make it visible.
+                    cell.bg_alpha = 1.;
+                }
 
                 return Some(cell);
             } else if !cell.is_empty() && !cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
@@ -190,6 +186,7 @@ pub struct RenderableCell {
     pub fg: Rgb,
     pub bg: Rgb,
     pub bg_alpha: f32,
+    pub underline: Rgb,
     pub flags: Flags,
 }
 
@@ -253,16 +250,22 @@ impl RenderableCell {
 
         // Convert cell point to viewport position.
         let cell_point = cell.point;
-        let point = display::point_to_viewport(display_offset, cell_point).unwrap();
+        let point = term::point_to_viewport(display_offset, cell_point).unwrap();
+
+        let flags = cell.flags;
+        let underline = cell
+            .underline_color()
+            .map_or(fg, |underline| Self::compute_fg_rgb(content, underline, flags));
 
         RenderableCell {
             zerowidth: cell.zerowidth().map(|zerowidth| zerowidth.to_vec()),
-            flags: cell.flags,
+            flags,
             character,
             bg_alpha,
             point,
             fg,
             bg,
+            underline,
         }
     }
 
@@ -271,7 +274,7 @@ impl RenderableCell {
         self.bg_alpha == 0.
             && self.character == ' '
             && self.zerowidth.is_none()
-            && !self.flags.intersects(Flags::UNDERLINE | Flags::STRIKEOUT | Flags::DOUBLE_UNDERLINE)
+            && !self.flags.intersects(Flags::ALL_UNDERLINES | Flags::STRIKEOUT)
     }
 
     /// Apply [`CellRgb`] colors to the cell's colors.
@@ -369,6 +372,17 @@ pub struct RenderableCursor {
     text_color: Rgb,
     is_wide: bool,
     point: Point<usize>,
+}
+
+impl RenderableCursor {
+    fn new_hidden() -> Self {
+        let shape = CursorShape::Hidden;
+        let cursor_color = Rgb::default();
+        let text_color = Rgb::default();
+        let is_wide = false;
+        let point = Point::default();
+        Self { shape, cursor_color, text_color, is_wide, point }
+    }
 }
 
 impl RenderableCursor {

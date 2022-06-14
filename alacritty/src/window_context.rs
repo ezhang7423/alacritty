@@ -19,15 +19,16 @@ use serde_json as json;
 #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
 use wayland_client::EventQueue;
 
-use alacritty_terminal::config::PtyConfig;
 use alacritty_terminal::event::Event as TerminalEvent;
 use alacritty_terminal::event_loop::{EventLoop as PtyEventLoop, Msg, Notifier};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Direction, Line, Point};
 use alacritty_terminal::sync::FairMutex;
+use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::tty;
 
+use crate::cli::WindowOptions;
 use crate::clipboard::Clipboard;
 use crate::config::UiConfig;
 use crate::display::Display;
@@ -51,6 +52,7 @@ pub struct WindowContext {
     font_size: Size,
     mouse: Mouse,
     dirty: bool,
+    preserve_title: bool,
     #[cfg(not(windows))]
     master_fd: RawFd,
     #[cfg(not(windows))]
@@ -61,18 +63,26 @@ impl WindowContext {
     /// Create a new terminal window context.
     pub fn new(
         config: &UiConfig,
-        pty_config: &PtyConfig,
+        options: &WindowOptions,
         window_event_loop: &EventLoopWindowTarget<Event>,
         proxy: EventLoopProxy<Event>,
         #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
         wayland_event_queue: Option<&EventQueue>,
     ) -> Result<Self, Box<dyn Error>> {
+        let mut pty_config = config.terminal_config.pty_config.clone();
+        options.terminal_options.override_pty_config(&mut pty_config);
+
+        let mut identity = config.window.identity.clone();
+        let preserve_title = options.window_identity.title.is_some();
+        options.window_identity.override_identity_config(&mut identity);
+
         // Create a display.
         //
         // The display manages a window and can draw the terminal.
         let display = Display::new(
             config,
             window_event_loop,
+            &identity,
             #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
             wayland_event_queue,
         )?;
@@ -90,7 +100,7 @@ impl WindowContext {
         // This object contains all of the state about what's being displayed. It's
         // wrapped in a clonable mutex since both the I/O loop and display need to
         // access it.
-        let terminal = Term::new(&config.terminal_config, display.size_info, event_proxy.clone());
+        let terminal = Term::new(&config.terminal_config, &display.size_info, event_proxy.clone());
         let terminal = Arc::new(FairMutex::new(terminal));
 
         // Create the PTY.
@@ -98,7 +108,7 @@ impl WindowContext {
         // The PTY forks a process to run the shell on the slave side of the
         // pseudoterminal. A file descriptor for the master side is retained for
         // reading/writing to the shell.
-        let pty = tty::new(pty_config, &display.size_info, display.window.x11_window_id())?;
+        let pty = tty::new(&pty_config, display.size_info.into(), display.window.x11_window_id())?;
 
         #[cfg(not(windows))]
         let master_fd = pty.file().as_raw_fd();
@@ -138,6 +148,7 @@ impl WindowContext {
             notifier: Notifier(loop_tx),
             terminal,
             display,
+            preserve_title,
             #[cfg(not(windows))]
             master_fd,
             #[cfg(not(windows))]
@@ -185,9 +196,18 @@ impl WindowContext {
             self.display.pending_update.dirty = true;
         }
 
-        // Live title reload.
-        if !config.window.dynamic_title || old_config.window.title != config.window.title {
-            self.display.window.set_title(&config.window.title);
+        // Update title on config reload according to the following table.
+        //
+        // │cli │ dynamic_title │ current_title == old_config ││ set_title │
+        // │ Y  │       _       │              _              ││     N     │
+        // │ N  │       Y       │              Y              ││     Y     │
+        // │ N  │       Y       │              N              ││     N     │
+        // │ N  │       N       │              _              ││     Y     │
+        if !self.preserve_title
+            && (!config.window.dynamic_title
+                || self.display.window.title() == old_config.window.identity.title)
+        {
+            self.display.window.set_title(config.window.identity.title.clone());
         }
 
         // Set subpixel anti-aliasing.
@@ -225,13 +245,14 @@ impl WindowContext {
             }
             // Continue to process all pending events.
             GlutinEvent::RedrawEventsCleared => (),
-            // Remap DPR change event to remove the lifetime.
+            // Remap scale_factor change event to remove the lifetime.
             GlutinEvent::WindowEvent {
                 event: WindowEvent::ScaleFactorChanged { scale_factor, new_inner_size },
                 window_id,
             } => {
                 let size = (new_inner_size.width, new_inner_size.height);
-                let event = Event::new(EventType::DprChanged(scale_factor, size), window_id);
+                let event =
+                    Event::new(EventType::ScaleFactorChanged(scale_factor, size), window_id);
                 self.event_queue.push(event.into());
                 return;
             }
@@ -264,6 +285,7 @@ impl WindowContext {
             master_fd: self.master_fd,
             #[cfg(not(windows))]
             shell_pid: self.shell_pid,
+            preserve_title: self.preserve_title,
             event_proxy,
             event_loop,
             clipboard,
@@ -306,6 +328,9 @@ impl WindowContext {
         }
 
         if self.dirty {
+            // Force the display to process any pending display update.
+            self.display.process_renderer_update();
+
             self.dirty = false;
 
             // Request immediate re-draw if visual bell animation is not finished yet.
@@ -332,7 +357,9 @@ impl WindowContext {
 
         let serialized_grid = json::to_string(&grid).expect("serialize grid");
 
-        let serialized_size = json::to_string(&self.display.size_info).expect("serialize size");
+        let size_info = &self.display.size_info;
+        let size = TermSize::new(size_info.columns(), size_info.screen_lines());
+        let serialized_size = json::to_string(&size).expect("serialize size");
 
         let serialized_config = format!("{{\"history_size\":{}}}", grid.history_size());
 

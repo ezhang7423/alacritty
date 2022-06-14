@@ -11,6 +11,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Minimum Rust version has been bumped to 1.56.0
 
+### Added
+
+- Track and report surface damage information to Wayland compositors
+- Escape sequence for undercurl, dotted and dashed underlines (`CSI 4 : [3-5] m`)
+- `ToggleMaximized` key binding action to (un-)maximize the active window, not bound by default
+- Support for OpenGL ES 2.0
+- Escape sequence to set underline color (`CSI 58 : 2 : Ps : Ps : Ps m`/`CSI 58 : 5 : Ps m`)
+- Escape sequence to reset underline color (`CSI 59 m`)
+- Vi mode keybinding (z) to center view around vi mode cursor 
+
+### Changed
+
+- The `--help` output was reworked with a new colorful syntax
+- OSC 52 is now disabled on unfocused windows
+- `SpawnNewInstance` no longer inherits initial `--command`
+
+### Fixed
+
+- Creating the IPC socket failing if WAYLAND_DISPLAY contains an absolute path
+- Crash when resetting the terminal while in vi mode
+- `font.glyph_offset` not live reloading
+- Failure when running on 10-bit color system
+- The colors being slightly different when using srgb displays on macOS
+- Vi cursor blinking not reset when navigating in search
+- Scrolling and middle-clicking modifying the primary selection
+- Bottom gap for certain builtin box drawing characters
+- Incorrect built-in glyphs for `U+2567` and `U+2568`
+- Character mappings in the DEC special graphics character set (line drawing)
+- Window flickering on resize on Wayland
+
+## 0.10.1
+
+### Added
+
+- Option `font.builtin_box_drawing` to disable the built-in font for drawing box characters
+
+### Changed
+
+- Builtin font thickness is now based on cell width instead of underline thickness
+
+### Fixed
+
+- OSC 4 not handling `?`
+- `?` in OSC strings reporting default colors instead of modified ones
+- OSC 104 not clearing colors when second parameter is empty
+- Builtin font lines not contiguous when `font.offset` is used
+- `font.glyph_offset` is no longer applied on builtin font
+- Buili-in font arcs alignment
+- Repeated permission prompts on M1 macs
+- Colors being slightly off when using `colors.transparent_background_colors`
+
 ## 0.10.0
 
 ### Packaging
@@ -32,6 +83,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Strip trailing whitespaces when yanking from a block selection
 - Display area keeps history position when viewport is cleared
 - Commands spawn from the current directory of the foreground shell in Unix-like systems
+- Remove trailing newline from strings taken from hints or simple/semantic selections
+- Builtin font is now used for box drawing characters from `U+2500` to `U+259f`
+- Logs now print the time since startup instead of the local time
 
 ### Fixed
 
@@ -43,6 +97,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Freeze when the vi cursor is on the scrollback and scrollback clear is invoked
 - Vi cursor on topmost of the display moving downward when scrolled into history with active output
 - Input lag on Wayland with Nvidia binary driver
+- Crash when hovering the mouse over fullwidth characters
+- Do not create logfile if the file already exists
 
 ### Removed
 

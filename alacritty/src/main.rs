@@ -14,12 +14,15 @@ compile_error!(r#"at least one of the "x11"/"wayland" features must be enabled"#
 
 #[cfg(target_os = "macos")]
 use std::env;
+use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::string::ToString;
 use std::{fs, process};
 
 use glutin::event_loop::EventLoop as GlutinEventLoop;
+#[cfg(all(feature = "x11", not(any(target_os = "macos", windows))))]
+use glutin::platform::unix::EventLoopWindowTargetExtUnix;
 use log::info;
 #[cfg(windows)]
 use winapi::um::wincon::{AttachConsole, FreeConsole, ATTACH_PARENT_PROCESS};
@@ -126,15 +129,20 @@ impl Drop for TemporaryFiles {
 /// Creates a window, the terminal state, PTY, I/O event loop, input processor,
 /// config change monitor, and runs the main display loop.
 fn alacritty(options: Options) -> Result<(), String> {
-    info!("Welcome to Alacritty");
-
-    
     // Setup glutin event loop.
     let window_event_loop = GlutinEventLoop::<Event>::with_user_event();
 
     // Initialize the logger as soon as possible as to capture output from other subsystems.
     let log_file = logging::initialize(&options, window_event_loop.create_proxy())
         .expect("Unable to initialize logger");
+
+    info!("Welcome to Alacritty");
+    info!("Version {}", env!("VERSION"));
+
+    #[cfg(all(feature = "x11", not(any(target_os = "macos", windows))))]
+    info!("Running on {}", if window_event_loop.is_x11() { "X11" } else { "Wayland" });
+    #[cfg(not(any(feature = "x11", target_os = "macos", windows)))]
+    info!("Running on Wayland");
 
     // Load configuration file.
     let config = config::load(&options);
@@ -180,13 +188,13 @@ fn alacritty(options: Options) -> Result<(), String> {
     };
 
     // Event processor.
-    let cli_options = options.terminal_options.clone();
+    let window_options = options.window_options.clone();
     let mut processor = Processor::new(config, options, &window_event_loop);
 
     // Create the first Alacritty window.
     let proxy = window_event_loop.create_proxy();
     processor
-        .create_window(&window_event_loop, proxy, cli_options)
+        .create_window(&window_event_loop, proxy, window_options)
         .map_err(|err| err.to_string())?;
 
     info!("Initialisation complete");
@@ -227,7 +235,7 @@ fn log_config_path(config: &UiConfig) {
 
     let mut msg = String::from("Configuration files loaded from:");
     for path in &config.config_paths {
-        msg.push_str(&format!("\n  {:?}", path.display()));
+        let _ = write!(msg, "\n  {:?}", path.display());
     }
 
     info!("{}", msg);

@@ -192,6 +192,9 @@ pub enum Action {
     /// Toggle fullscreen.
     ToggleFullscreen,
 
+    /// Toggle maximized.
+    ToggleMaximized,
+
     /// Toggle simple fullscreen on macOS.
     #[cfg(target_os = "macos")]
     ToggleSimpleFullscreen,
@@ -278,6 +281,8 @@ pub enum ViAction {
     SearchEnd,
     /// Launch the URL below the vi mode cursor.
     Open,
+    /// Centers the screen around the vi mode cursor.
+    CenterAroundViCursor,
 }
 
 /// Search mode specific actions.
@@ -369,7 +374,8 @@ macro_rules! bindings {
 pub fn default_mouse_bindings() -> Vec<MouseBinding> {
     bindings!(
         MouseBinding;
-        MouseButton::Right;                    MouseAction::ExpandSelection;
+        MouseButton::Right;                         MouseAction::ExpandSelection;
+        MouseButton::Right,   ModifiersState::CTRL; MouseAction::ExpandSelection;
         MouseButton::Middle, ~BindingMode::VI; Action::PasteSelection;
     )
 }
@@ -500,6 +506,8 @@ pub fn default_key_bindings() -> Vec<KeyBinding> {
             ViAction::SearchPrevious;
         Return,                        +BindingMode::VI, ~BindingMode::SEARCH;
             ViAction::Open;
+        Z,                             +BindingMode::VI, ~BindingMode::SEARCH;
+            ViAction::CenterAroundViCursor;
         K,                             +BindingMode::VI, ~BindingMode::SEARCH;
             ViMotion::Up;
         J,                             +BindingMode::VI, ~BindingMode::SEARCH;
@@ -1011,7 +1019,7 @@ impl<'a> Deserialize<'a> for RawBinding {
                             let val = map.next_value::<SerdeValue>()?;
                             if val.is_u64() {
                                 let scancode = val.as_u64().unwrap();
-                                if scancode > u64::from(std::u32::MAX) {
+                                if scancode > u64::from(u32::MAX) {
                                     return Err(<V::Error as Error>::custom(format!(
                                         "Invalid key binding, scancode too big: {}",
                                         scancode

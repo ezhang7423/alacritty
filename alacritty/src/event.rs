@@ -13,10 +13,7 @@ use std::time::{Duration, Instant};
 use std::{env, f32, mem};
 
 use glutin::dpi::PhysicalSize;
-use glutin::event::{
-    ElementState, Event as GlutinEvent, KeyboardInput, ModifiersState, MouseButton, VirtualKeyCode,
-    WindowEvent,
-};
+use glutin::event::{ElementState, Event as GlutinEvent, ModifiersState, MouseButton, WindowEvent};
 use glutin::event_loop::{ControlFlow, EventLoop, EventLoopProxy, EventLoopWindowTarget};
 use glutin::platform::run_return::EventLoopExtRunReturn;
 #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
@@ -30,7 +27,7 @@ use crossfont::{self, Size};
 
 use x11_dl::keysym::{XK_Control_L, XK_End, XK_Home, XK_E, XK_Q};
 use x11_dl::xlib::CurrentTime;
-use x11_dl::{xinput2, xlib, xtest};
+use x11_dl::{xlib, xtest};
 
 use alacritty_terminal::config::LOG_TARGET_CONFIG;
 use alacritty_terminal::event::{Event as TerminalEvent, EventListener, Notify};
@@ -39,9 +36,9 @@ use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Boundary, Column, Direction, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::search::{Match, RegexSearch};
-use alacritty_terminal::term::{ClipboardType, SizeInfo, Term, TermMode};
+use alacritty_terminal::term::{self, ClipboardType, Term, TermMode};
 
-use crate::cli::{Options as CliOptions, TerminalOptions};
+use crate::cli::{Options as CliOptions, WindowOptions};
 use crate::clipboard::Clipboard;
 use crate::config::ui_config::{HintAction, HintInternalAction};
 use crate::config::{self, UiConfig};
@@ -50,7 +47,7 @@ use crate::daemon::foreground_process_path;
 use crate::daemon::spawn_daemon;
 use crate::display::hint::HintMatch;
 use crate::display::window::Window;
-use crate::display::{self, Display};
+use crate::display::{Display, SizeInfo};
 use crate::input::{self, ActionContext as _, FONT_SIZE_STEP};
 use crate::message_bar::{Message, MessageBuffer};
 use crate::scheduler::{Scheduler, TimerId, Topic};
@@ -90,12 +87,12 @@ impl From<Event> for GlutinEvent<'_, Event> {
 /// Alacritty events.
 #[derive(Debug, Clone)]
 pub enum EventType {
-    DprChanged(f64, (u32, u32)),
+    ScaleFactorChanged(f64, (u32, u32)),
     Terminal(TerminalEvent),
     ConfigReload(PathBuf),
     Message(Message),
     Scroll(Scroll),
-    CreateWindow(TerminalOptions),
+    CreateWindow(WindowOptions),
     BlinkCursor,
     SearchNext,
 }
@@ -194,6 +191,7 @@ pub struct ActionContext<'a, N, T> {
     pub search_state: &'a mut SearchState,
     pub font_size: &'a mut Size,
     pub dirty: &'a mut bool,
+    pub preserve_title: bool,
     #[cfg(not(windows))]
     pub master_fd: RawFd,
     #[cfg(not(windows))]
@@ -239,7 +237,6 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             let point = self.mouse.point(&self.size_info(), display_offset);
             self.update_selection(point, self.mouse.cell_side);
         }
-        self.copy_selection(ClipboardType::Selection);
 
         *self.dirty = true;
     }
@@ -275,9 +272,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
     }
 
     fn scl_cb(&mut self) {
-        println!("Updating temporary point");
         **self.tmp_point = self.terminal.grid().cursor.point;
-        println!("{}. {}", self.tmp_point.line.0, self.tmp_point.column.0);
         unsafe {
             let xlib = xlib::Xlib::open().unwrap();
             let xtest = xtest::Xf86vmode::open().unwrap();
@@ -300,7 +295,6 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         }
     }
     fn scl_cb2(&mut self) {
-        println!("in cb2: {}. {}", self.tmp_point.line.0, self.tmp_point.column.0);
         self.start_selection(SelectionType::Simple, **self.tmp_point, Direction::Left);
         self.update_selection(self.terminal.grid().cursor.point, Direction::Right);
     }
@@ -431,6 +425,11 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         // Reuse the arguments passed to Alacritty for the new instance.
         #[allow(clippy::while_let_on_iterator)]
         while let Some(arg) = env_args.next() {
+            // New instances shouldn't inherit command.
+            if arg == "-e" || arg == "--command" {
+                break;
+            }
+
             // On unix, the working directory of the foreground shell is used by `start_daemon`.
             #[cfg(not(windows))]
             if arg == "--working-directory" {
@@ -446,9 +445,9 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
     #[cfg(not(windows))]
     fn create_new_window(&mut self) {
-        let mut options = TerminalOptions::default();
+        let mut options = WindowOptions::default();
         if let Ok(working_directory) = foreground_process_path(self.master_fd, self.shell_pid) {
-            options.working_directory = Some(working_directory);
+            options.terminal_options.working_directory = Some(working_directory);
         }
 
         let _ = self.event_proxy.send_event(Event::new(EventType::CreateWindow(options), None));
@@ -458,7 +457,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
     fn create_new_window(&mut self) {
         let _ = self
             .event_proxy
-            .send_event(Event::new(EventType::CreateWindow(TerminalOptions::default()), None));
+            .send_event(Event::new(EventType::CreateWindow(WindowOptions::default()), None));
     }
 
     fn spawn_daemon<I, S>(&self, program: &str, args: I)
@@ -834,11 +833,23 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
     /// Toggle the vi mode status.
     #[inline]
     fn toggle_vi_mode(&mut self) {
-        if !self.terminal.mode().contains(TermMode::VI) {
+        if self.terminal.mode().contains(TermMode::VI) {
+            // If we had search running when leaving Vi mode we should mark terminal fully damaged
+            // to cleanup highlighted results.
+            if self.search_state.dfas.take().is_some() {
+                self.terminal.mark_fully_damaged();
+            } else {
+                // Damage line indicator.
+                self.terminal.damage_line(0, 0, self.terminal.columns() - 1);
+            }
+        } else {
             self.clear_selection();
         }
 
-        self.cancel_search();
+        if self.search_active() {
+            self.cancel_search();
+        }
+
         self.terminal.toggle_vi_mode();
 
         *self.dirty = true;
@@ -909,10 +920,9 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
         }
 
         // Reset display offset and cursor position.
+        self.terminal.vi_mode_cursor.point = self.search_state.origin;
         self.terminal.scroll_display(Scroll::Delta(self.search_state.display_offset_delta));
         self.search_state.display_offset_delta = 0;
-        self.terminal.vi_mode_cursor.point =
-            self.search_state.origin.grid_clamp(self.terminal, Boundary::Grid);
 
         *self.dirty = true;
     }
@@ -985,13 +995,15 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
     fn update_cursor_blinking(&mut self) {
         // Get config cursor style.
         let mut cursor_style = self.config.terminal_config.cursor.style;
-        if self.terminal.mode().contains(TermMode::VI) {
+        let vi_mode = self.terminal.mode().contains(TermMode::VI);
+        if vi_mode {
             cursor_style = self.config.terminal_config.cursor.vi_mode_style.unwrap_or(cursor_style);
-        };
+        }
 
         // Check terminal cursor style.
         let terminal_blinking = self.terminal.cursor_style().blinking;
-        let blinking = cursor_style.blinking_override().unwrap_or(terminal_blinking);
+        let mut blinking = cursor_style.blinking_override().unwrap_or(terminal_blinking);
+        blinking &= vi_mode || self.terminal().mode().contains(TermMode::SHOW_CURSOR);
 
         // Update cursor blinking state.
         let timer_id = TimerId::new(Topic::BlinkCursor, self.display.window.id());
@@ -1069,28 +1081,26 @@ impl Mouse {
         let line = self.y.saturating_sub(size.padding_y() as usize) / (size.cell_height() as usize);
         let line = min(line, size.bottommost_line().0 as usize);
 
-        display::viewport_to_point(display_offset, Point::new(line, col))
+        term::viewport_to_point(display_offset, Point::new(line, col))
     }
 }
 
 impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
     /// Handle events from glutin.
-    ///
-    /// Doesn't take self mutably due to borrow checking.
     pub fn handle_event(&mut self, event: GlutinEvent<'_, Event>) {
         match event {
             GlutinEvent::UserEvent(Event { payload, .. }) => match payload {
-                EventType::DprChanged(scale_factor, (width, height)) => {
+                EventType::ScaleFactorChanged(scale_factor, (width, height)) => {
                     let display_update_pending = &mut self.ctx.display.pending_update;
 
-                    // Push current font to update its DPR.
+                    // Push current font to update its scale factor.
                     let font = self.ctx.config.font.clone();
                     display_update_pending.set_font(font.with_size(*self.ctx.font_size));
 
                     // Resize to event's dimensions, since no resize event is emitted on Wayland.
                     display_update_pending.set_dimensions(PhysicalSize::new(width, height));
 
-                    self.ctx.window().dpr = scale_factor;
+                    self.ctx.window().scale_factor = scale_factor;
                     *self.ctx.dirty = true;
                 }
                 EventType::SearchNext => self.ctx.goto_match(None),
@@ -1106,13 +1116,14 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                 }
                 EventType::Terminal(event) => match event {
                     TerminalEvent::Title(title) => {
-                        if self.ctx.config.window.dynamic_title {
-                            self.ctx.window().set_title(&title);
+                        if !self.ctx.preserve_title && self.ctx.config.window.dynamic_title {
+                            self.ctx.window().set_title(title);
                         }
                     }
                     TerminalEvent::ResetTitle => {
-                        if self.ctx.config.window.dynamic_title {
-                            self.ctx.display.window.set_title(&self.ctx.config.window.title);
+                        let window_config = &self.ctx.config.window;
+                        if window_config.dynamic_title {
+                            self.ctx.display.window.set_title(window_config.identity.title.clone());
                         }
                     }
                     TerminalEvent::Wakeup => *self.ctx.dirty = true,
@@ -1132,14 +1143,23 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                         }
                     }
                     TerminalEvent::ClipboardStore(clipboard_type, content) => {
-                        self.ctx.clipboard.store(clipboard_type, content);
-                    }
+                        if self.ctx.terminal.is_focused {
+                            self.ctx.clipboard.store(clipboard_type, content);
+                        }
+                    },
                     TerminalEvent::ClipboardLoad(clipboard_type, format) => {
-                        let text = format(self.ctx.clipboard.load(clipboard_type).as_str());
-                        self.ctx.write_to_pty(text.into_bytes());
-                    }
+                        if self.ctx.terminal.is_focused {
+                            let text = format(self.ctx.clipboard.load(clipboard_type).as_str());
+                            self.ctx.write_to_pty(text.into_bytes());
+                        }
+                    },
                     TerminalEvent::ColorRequest(index, format) => {
-                        let text = format(self.ctx.display.colors[index]);
+                        let color = self.ctx.terminal().colors()[index]
+                            .unwrap_or(self.ctx.display.colors[index]);
+                        self.ctx.write_to_pty(format(color).into_bytes());
+                    },
+                    TerminalEvent::TextAreaSizeRequest(format) => {
+                        let text = format(self.ctx.size_info().into());
                         self.ctx.write_to_pty(text.into_bytes());
                     }
                     TerminalEvent::PtyWrite(text) => self.ctx.write_to_pty(text.into_bytes()),
@@ -1273,14 +1293,11 @@ impl Processor {
         &mut self,
         event_loop: &EventLoopWindowTarget<Event>,
         proxy: EventLoopProxy<Event>,
-        options: TerminalOptions,
+        options: WindowOptions,
     ) -> Result<(), Box<dyn Error>> {
-        let mut pty_config = self.config.terminal_config.pty_config.clone();
-        options.override_pty_config(&mut pty_config);
-
         let window_context = WindowContext::new(
             &self.config,
-            &pty_config,
+            &options,
             event_loop,
             proxy,
             #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]

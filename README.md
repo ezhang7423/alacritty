@@ -1,3 +1,4 @@
+MY BRANCH IS `selectcurent`
 <p align="center">
     <img width="200" alt="Alacritty Logo" src="https://raw.githubusercontent.com/alacritty/alacritty/master/extra/logo/compat/alacritty-term%2Bscanlines.png">
 </p>
@@ -33,8 +34,6 @@ You can find an overview over the features available in Alacritty [here](./docs/
 - [Announcing Alacritty, a GPU-Accelerated Terminal Emulator](https://jwilm.io/blog/announcing-alacritty/) January 6, 2017
 - [A talk about Alacritty at the Rust Meetup January 2017](https://www.youtube.com/watch?v=qHOdYO3WUTk) January 19, 2017
 - [Alacritty Lands Scrollback, Publishes Benchmarks](https://jwilm.io/blog/alacritty-lands-scrollback/) September 17, 2018
-- [Version 0.3.0 Release Announcement](https://blog.christianduerr.com/alacritty_030_announcement) April 07, 2019
-- [Version 0.5.0 Release Announcement](https://blog.christianduerr.com/alacritty_0_5_0_announcement) July 31, 2020
 
 ## Installation
 
@@ -49,7 +48,7 @@ For everyone else, the detailed instructions to install Alacritty can be found
 
 ### Requirements
 
-- OpenGL 3.3 or higher
+- At least OpenGL ES 2.0
 - [Windows] ConPTY support (Windows 10 version 1809 or higher)
 
 ## Configuration
